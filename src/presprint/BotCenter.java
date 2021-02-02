@@ -5,6 +5,17 @@ import battlecode.common.*;
 //figure out how to dynamically maintain information about existing hqs for team
 
 public class BotCenter extends RobotPlayer {
+    public static int turn_ptr = 0;
+    public static void region_and_location_parser(RobotController rc, int code) throws GameActionException{
+        String bincode = bin_conv(code);
+        int len = bin_conv(HQ_ENCODED_POSITION).length();
+        String one = bincode.substring(0,len);
+        String two = bincode.substring(len);
+        TEMP_POSITION = dec_conv(one);
+        TEMP_REGION = dec_conv(two);
+    }
+
+
     public static Direction[] correspond = {Direction.WEST,
             Direction.EAST,
             Direction.NORTH,
@@ -15,17 +26,21 @@ public class BotCenter extends RobotPlayer {
             Direction.NORTHWEST};
 
     //detects muckrakers and suggests a different build order based on a return value
-    public static int muckraker_counter(RobotController rc) throws GameActionException{
+    public static int muckraker_data(RobotController rc) throws GameActionException{
         int muckraker_coming = 0;
         int tot_health = 0;
         for(RobotInfo r : rc.senseNearbyRobots()){
-            if(r.team != my_team && r.type== RobotType.MUCKRAKER){
-                ++muckraker_coming;
-                tot_health += r.conviction;
+            if(r.team == my_team && r.type == RobotType.MUCKRAKER){
+                int code = rc.getFlag(r.ID);
+                String bin = bin_conv(code);
+                String pert_reg = bin.substring(16);
+                int conv = dec_conv(pert_reg);
+                neutral_ecs.add(conv);
             }
         }
         return 0;
     }
+
 
 
     public static void potential_enemy_ecs(RobotController rc) throws GameActionException{
@@ -46,19 +61,117 @@ public class BotCenter extends RobotPlayer {
         return;
     }
 
+    public static void control_spawn_order(RobotController rc) throws GameActionException{
+        if (!SCOUT_MAP_SIZE && RANDOM_MAP_HEURISTIC){
+            HQ_ENCODED_POSITION = encode(rc.getLocation().x, rc.getLocation().y);
+            int corr_val = turn_ptr % (potential_build_orders.get(BUILD_ORDER_INDEX).length);
+            ++turn_ptr;
+            /*
+            String comb = bin_conv(HQ_ENCODED_POSITION);
+            String comb2 = bin_conv(corr_val);
+            int COMB_LENGTH = comb.length();
+            int COMB_TWO_LENGTH = comb2.length();
+            for(int i = 14-COMB_LENGTH; --i > 0;){
+                comb = '0' + comb;
+            }
+            for(int i = 9-COMB_TWO_LENGTH; --i>0;){
+                comb2 = '0' + comb2;
+            }
+            String bitpacked = comb + comb2; //occupies ~22 bits of space, should be transmissible
+            rc.setFlag(dec_conv(bitpacked));
+             */
+            //if(swarm_locs.size()==0) {
+            //  potential_enemy_ecs(rc);
+            // }
+            if(!LATTICE_COMPUTED){
+                precompute_lattice_positions(rc);
+                LATTICE_COMPUTED=true;
+            }
+
+            if(potential_build_orders.get(BUILD_ORDER_INDEX)[corr_val]==1){
+                for(Direction dir: correspond) {
+                    int het = politician_valid_health[turnCount % politician_valid_health.length];
+                    if (rc.canBuildRobot(RobotType.POLITICIAN, dir, het)) {
+                        rc.buildRobot(RobotType.POLITICIAN, dir, het);
+                    }
+                }
+            } else if(potential_build_orders.get(BUILD_ORDER_INDEX)[corr_val]==0){
+                for(Direction dir: correspond) {
+                    if (rc.canBuildRobot(RobotType.MUCKRAKER, dir, 1)) {
+                        rc.buildRobot(RobotType.MUCKRAKER, dir, 1);
+                    }
+                }
+            }else if(potential_build_orders.get(BUILD_ORDER_INDEX)[corr_val]==2) {
+                for(Direction dir: correspond) {
+                    if (rc.canBuildRobot(RobotType.SLANDERER, dir, SLANDERER_HEALTH_CAP)) {
+                        rc.buildRobot(RobotType.SLANDERER, dir, SLANDERER_HEALTH_CAP);
+                    }
+                }
+            }
+            //bidding is going to be suboptimal
+            for(RobotInfo r : rc.senseNearbyRobots()){
+                if(r.type==RobotType.MUCKRAKER && r.team==my_team){
+                    int flag = rc.getFlag(r.ID);
+                    //region_and_location_parser(rc,flag);
+                    //find a way to distinguish muckrakers carrying neutral EC info from normal muckrakers
+
+                }
+            }
+
+
+        } else if(!SCOUT_MAP_SIZE && !RANDOM_MAP_HEURISTIC){
+            rc.setFlag(HQ_ASSIGNED_SUBREGION);
+            HQ_ASSIGNED_SUBREGION = ((HQ_ASSIGNED_SUBREGION + 1) % (precomputed_lattice_codes.length));
+            int corr_val = turnCount % (potential_build_orders.get(BUILD_ORDER_INDEX).length);
+            if(potential_build_orders.get(BUILD_ORDER_INDEX)[corr_val]==1){
+                for(Direction dir: correspond) {
+                    int het = politician_valid_health[turnCount % politician_valid_health.length];
+                    if (rc.canBuildRobot(RobotType.POLITICIAN, dir, het)) {
+                        rc.buildRobot(RobotType.POLITICIAN, dir, het);
+                    }
+                }
+            } else if(potential_build_orders.get(BUILD_ORDER_INDEX)[corr_val]==0){
+                for(Direction dir: correspond) {
+                    if (rc.canBuildRobot(RobotType.MUCKRAKER, dir, 1)) {
+                        rc.buildRobot(RobotType.MUCKRAKER, dir, 1);
+                    }
+                }
+            }else if(potential_build_orders.get(BUILD_ORDER_INDEX)[corr_val]==2) {
+                for(Direction dir: correspond) {
+                    if (rc.canBuildRobot(RobotType.SLANDERER, dir, SLANDERER_HEALTH_CAP)) {
+                        rc.buildRobot(RobotType.SLANDERER, dir, SLANDERER_HEALTH_CAP);
+                    }
+                }
+            }
+        }
+    }
+
 
 
     public static void construct(RobotController prc) throws GameActionException {
         if(my_team==null){
             my_team=prc.getTeam();
         }
+        if(HQ_THAT_SPAWNED_ME == null){
+            HQ_THAT_SPAWNED_ME = prc.getLocation();
+            HQ_ENCODED_POSITION = (128 * (prc.getLocation().x % 128)) + (prc.getLocation().y % 128);
+            rc.setFlag(HQ_ENCODED_POSITION);
+        } else if(neutral_ecs.size() > 0){
+            int idx = (turnCount % neutral_ecs.size());
+            if(troops_sent_region[neutral_ecs.get(idx)] == INTERNAL_LIMIT_COUNTER ){
+                return;
+            }
+            control_spawn_order(rc);
+            ++troops_sent_region[neutral_ecs.get(idx)];
+        }
 
         if(PREV_INFLUENCE==0){
             PREV_INFLUENCE = prc.getInfluence();
         } else {
-            rc.bid( (int)(BID_PERCENTAGE * Math.abs(PREV_INFLUENCE - prc.getInfluence())) );
+            //rc.bid( (int)(BID_PERCENTAGE * Math.abs(PREV_INFLUENCE - prc.getInfluence())) );
             PREV_INFLUENCE = prc.getInfluence();
         }
+
 
         System.out.println("FLAG: " + prc.getFlag(prc.getID()));
         MapLocation loc = prc.getLocation();
@@ -122,6 +235,23 @@ public class BotCenter extends RobotPlayer {
             }
         }
         //send out 6 politicians for scouting the map
+        int ROT_VALUE = 1;
+
+        if(turnCount >= 0 && turnCount <= 100){
+            ROT_VALUE=7;
+        } else if(turnCount >= 100 && turnCount <=300){
+            ROT_VALUE=5;
+        } else if(turnCount >= 300 && turnCount <= 600){
+            ROT_VALUE=3;
+        } else if(turnCount >= 600 && turnCount <= 1000){
+            ROT_VALUE=2;
+        }else if(turnCount >= 1000 && turnCount <=1500){
+            ROT_VALUE=1;
+        }
+
+        if(turnCount % ROT_VALUE == 0) {
+            control_spawn_order(rc);
+        }
 
         System.out.println("TURN POINTER: " + turn_ptr);
         System.out.println("SCOUT_MAP_SIZE: " + SCOUT_MAP_SIZE);
@@ -138,35 +268,9 @@ public class BotCenter extends RobotPlayer {
                 ++turn_ptr;
                 prc.setFlag(turn_ptr);
             }
-        } else if (!SCOUT_MAP_SIZE){
-            int corr_val = turnCount % (build_order.length);
-            //if(swarm_locs.size()==0) {
-              //  potential_enemy_ecs(rc);
-           // }
-            if(potential_build_orders.get(1)[corr_val]==1){
-                for(Direction dir: correspond) {
-                    int het = politician_valid_health[turnCount % politician_valid_health.length];
-                    if (rc.canBuildRobot(RobotType.POLITICIAN, dir, het)) {
-                        rc.buildRobot(RobotType.POLITICIAN, dir, het);
-                    }
-                }
-            } else if(potential_build_orders.get(1)[corr_val]==0){
-                for(Direction dir: correspond) {
-                    if (rc.canBuildRobot(RobotType.MUCKRAKER, dir, 1)) {
-                        rc.buildRobot(RobotType.MUCKRAKER, dir, 1);
-                    }
-                }
-            }else if(potential_build_orders.get(1)[corr_val]==2) {
-                for(Direction dir: correspond) {
-                    if (rc.canBuildRobot(RobotType.SLANDERER, dir, SLANDERER_HEALTH_CAP)) {
-                        rc.buildRobot(RobotType.SLANDERER, dir, SLANDERER_HEALTH_CAP);
-                    }
-                }
-            }
-            //bidding is going to be suboptimal
-
-
         }
+
+        minimax_regret(rc);
 
         //send out politicians and muckrakers to candidate hq locations; if we find neutral or enemy hqs
         //it should somehow be transmitted back to our ECs
@@ -198,13 +302,54 @@ public class BotCenter extends RobotPlayer {
 
 
     }
+
+    public static double bidding_activation_function(RobotController rc, int amt) throws GameActionException{
+        double conv = (double)(amt)/(double)(750);
+        double ret = Math.pow(Math.E, conv) - Math.pow(Math.E, -conv);
+        double ret2 = Math.pow(Math.E,-conv) + Math.pow(Math.E, conv);
+        double ans  = ret/ret2;
+        return ans;
+    }
     public static void maintain_formation(RobotController rc) throws GameActionException{
 
     }
 
     //bidding strategy will probably be minimax on regret
-    public static void bidSprint(RobotController rc) throws GameActionException{
-        rc.bid(1);
+    //binary search on the amount that the enemy is bidding(works most of the time since most
+    //current bidding strategies leads to bidding some constant amount)
+    public static void minimax_regret(RobotController rc) throws GameActionException{
+        int cur_votes = rc.getTeamVotes();
+
+        /*
+        if(CUR_VOTES < cur_votes){
+            BID_PERCENTAGE = BID_PERCENTAGE/1.01;
+        } else {
+            BID_PERCENTAGE = BID_PERCENTAGE * 1.01;
+        }
+         */
+
+
+        if(rc.getTeamVotes() < 751 && turnCount < 1200) {
+            DYN_MULTIPLIER += (double)(turnCount)/(double)(120000);
+            if (rc.canBid((int) (Math.ceil(DYN_MULTIPLIER * BID_PERCENTAGE * Math.abs(rc.getInfluence() - PREV_INFLUENCE))))) {
+                rc.bid((int) (Math.ceil(DYN_MULTIPLIER * BID_PERCENTAGE * Math.abs(rc.getInfluence() - PREV_INFLUENCE))));
+                System.out.println("BID: " + (int) (Math.ceil(DYN_MULTIPLIER * BID_PERCENTAGE * Math.abs(rc.getInfluence() - PREV_INFLUENCE))));
+            } else {
+                rc.bid(1 + (int)(Math.ceil((double)(turnCount)/(double)(300))));
+            }
+        } else if(rc.getTeamVotes() < 751 && turnCount >= 1200){
+            rc.bid(22);
+        }
+        System.out.println("BID PERCENTAGE: " + BID_PERCENTAGE);
+        CUR_VOTES=cur_votes;
+        PREV_INFLUENCE = rc.getInfluence();
+    }
+    public static void binary_serch_on_bid(RobotController rc) throws GameActionException{
+        int md = (LEFT_BID_PTR);
+    }
+
+    public static void modulate_build_order(RobotController rc) throws GameActionException{
+        int get_count = rc.getRobotCount();
     }
 
 }

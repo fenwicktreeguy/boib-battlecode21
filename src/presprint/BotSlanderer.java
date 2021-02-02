@@ -26,11 +26,22 @@ class PairComparator implements Comparator{
 }
 
 public class BotSlanderer extends RobotPlayer{
+    public static int turn_ptr = (int)(Math.random() * 289);
+    public static boolean TRANSMIT_MESSAGE = false;
+    public static MapLocation SLAND_DESTINATION;
 
     public static int manhattan_distance(MapLocation one, MapLocation two){
         return (int)(Math.abs(one.x-two.x)) + (int)(Math.abs(one.y-two.y));
     }
 
+    public static void region_and_location_parser(RobotController rc, int code) throws GameActionException{
+        String bincode = bin_conv(code);
+        int len = bin_conv(encode(SLAND_DESTINATION.x,SLAND_DESTINATION.y)).length();
+        String one = bincode.substring(0,len);
+        String two = bincode.substring(len);
+        TEMP_POSITION = dec_conv(one);
+        TEMP_REGION = dec_conv(two);
+    }
     public static void populate_top(int i, ArrayList<SortedPair> m) {
         int y_coord = 0;
         boolean flg = false;
@@ -107,13 +118,27 @@ public class BotSlanderer extends RobotPlayer{
     }
 
     public static void mindful_swarm(RobotController rc) throws GameActionException{
-        System.out.println("DECODE LENGTH: " + decode.length);
-
+        //attempting to get an emergent behavior for examining the map and converting neutral ECs
+        turn_ptr += 2;
+        Random ran = new Random(rc.getID());
+        if(ran.nextDouble() >= 0.5){
+            turn_ptr += (int)(Math.random() * 289);
+            turn_ptr %= 1e18;
+        }
+        System.out.println("CURRENT TURN POINTER: " + turn_ptr);
+        if(my_team==null){
+            my_team=rc.getTeam();
+        }
+        if(!LATTICE_COMPUTED){
+            precompute_lattice_positions(rc);
+            LATTICE_COMPUTED=true;
+        }
         if(rc.getFlag(rc.getID())==0){
             int gen_x = (int)(Math.random() * (POL_RANDOM_MULTIPLIER/4) ) + HQ_THAT_SPAWNED_ME.x;
             int gen_y = (int)(Math.random() * (POL_RANDOM_MULTIPLIER/4) ) + HQ_THAT_SPAWNED_ME.y;
             double seed1 = Math.random();
             double seed2 = Math.random();
+            int gen_rand = (int)(Math.random() * precomputed_lattice_codes.length);
             int gen = 0;
             if(seed1 <= 0.4){
                 gen_x *= -1;
@@ -122,7 +147,15 @@ public class BotSlanderer extends RobotPlayer{
                 gen_y *= -1;
             }
             gen = encode(gen_x,gen_y);
-            rc.setFlag(gen);
+            double r = ran.nextDouble();
+            if(r >= 0.5){
+                rc.setFlag(gen);
+            } else {
+                rc.setFlag(precomputed_lattice_codes[turn_ptr % (precomputed_lattice_codes.length)]);
+            }
+            SLAND_DESTINATION = decode(rc,precomputed_lattice_codes[turn_ptr % (precomputed_lattice_codes.length)]);
+            ++turn_ptr;
+            //rc.setFlag(gen);
         }
 
         //as a rule of thumb, neutral hqs are more important than enemy hqs, since the former gives leverage for control,
@@ -134,15 +167,44 @@ public class BotSlanderer extends RobotPlayer{
                     ec_id.add(identif);
                     raw_ec_id.add(r.ID);
                 }
+                if(HQ_THAT_SPAWNED_ME==null){
+                    HQ_THAT_SPAWNED_ME=r.location;
+                    HQ_ENCODED_POSITION = encode(r.location.x,r.location.y);
+                }
             } else if(r.type== RobotType.ENLIGHTENMENT_CENTER && r.team == Team.NEUTRAL){
                 int identif =  128 * ( (r.location.x + r.location.y) % 128) + ( (r.location.x+r.location.y)%128);
                 ec_id.add(identif);
                 raw_ec_id.add(r.ID);
                 rc.setFlag(ec_id.get(0));
+                //send muckraker message along chain
+            } else if(r.type==RobotType.MUCKRAKER && r.team == my_team){
+                //TODO: add clustering behavior to avoid muckrakers
             }
         }
-
-        MapLocation scatter = decode(rc.getFlag(rc.getID()));
+        CURRENT_ALLOCATED_REGION = my_current_region(rc.getFlag(rc.getID()));
+        /*
+        int ENEMY_NW = 0;
+        int ENEMY_NE = 0;
+        int ENEMY_SW = 0;
+        int ENEMY_SE = 0;
+        for(RobotInfo r : rc.senseNearbyRobots()){
+            if(r.type==RobotType.MUCKRAKER && r.team != my_team){
+                boolean one = (r.location.x > r.location)
+            }
+        }
+         */
+        MapLocation scatter = decode(rc, rc.getFlag(rc.getID()));
+        for(RobotInfo r : rc.senseNearbyRobots()){
+            if(r.type==RobotType.ENLIGHTENMENT_CENTER && r.team==Team.NEUTRAL){
+                scatter = r.location;
+            }
+            if(r.type==RobotType.MUCKRAKER && r.team != my_team){
+                int x_diff = r.location.x - rc.getLocation().x;
+                int y_diff = r.location.y-rc.getLocation().y;
+                scatter = new MapLocation(rc.getLocation().x-x_diff,rc.getLocation().y-y_diff);
+                break;
+            }
+        }
         System.out.println("Target point: " + scatter.x + " " + scatter.y);
         BugNav b = new BugNav(rc.getLocation(), scatter);
         boolean val = b.path(rc);
@@ -152,6 +214,7 @@ public class BotSlanderer extends RobotPlayer{
             int gen_y = (int)(Math.random() * (POL_RANDOM_MULTIPLIER/4))  + HQ_THAT_SPAWNED_ME.y;
             double seed1 = Math.random();
             double seed2 = Math.random();
+            int gen_rand = (int)(Math.random() * precomputed_lattice_codes.length);
             int gen = 0;
             if(seed1 <= 0.4){
                 gen_x *= -1;
@@ -160,7 +223,16 @@ public class BotSlanderer extends RobotPlayer{
                 gen_y *= -1;
             }
             gen = encode(gen_x,gen_y);
-            rc.setFlag(gen);
+            double r = ran.nextDouble();
+            if(r >= 0.5){
+                rc.setFlag(gen);
+            } else {
+                rc.setFlag(precomputed_lattice_codes[turn_ptr % (precomputed_lattice_codes.length)]);
+            }
+            //rc.setFlag(precomputed_lattice_codes[gen_rand]);
+            rc.setFlag(precomputed_lattice_codes[turn_ptr % (precomputed_lattice_codes.length)]);
+            SLAND_DESTINATION = decode(rc,precomputed_lattice_codes[turn_ptr % (precomputed_lattice_codes.length)]);
+            ++turn_ptr;
         }else if(val && rc.canSenseRobot(raw_ec_id.get(0))){
 
         }

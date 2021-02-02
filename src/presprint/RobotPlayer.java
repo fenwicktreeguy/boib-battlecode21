@@ -13,15 +13,22 @@ public strictfp class RobotPlayer{
             RobotType.SLANDERER,
             RobotType.MUCKRAKER,
     };
-    public static int[] SLANDERER_RADII = {5,12,15}; //by default let it be
+    public static int[] SLANDERER_RADII = {4,5,6,12,15}; //by default let it be
     static Direction[] sub = {Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST};
-    public static ArrayList<int[]> potential_build_orders = new ArrayList<int[]>(5);
+    public static ArrayList<int[]> potential_build_orders = new ArrayList<int[]>(6);
     //1 is a politician, 0 is a muckraker, and 2 is a slanderer
-    public static final int[] build_order = {1,1,1,1,2,2,2,2,0,0};
-    public static final int[] build_order_two = {1,1,1,1,1,2,2,2,2,0,0,0};
+    public static final int[] build_order = {0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,2,2,2,2,2,2,2};
+    public static final int[] build_order_two = {1,1,1,1,1,2,2,2,2,2,2,2,2,0,0,0};
     public static final int[] build_order_three = {1,1,2,2,0,0,0,0};
     public static final int[] build_order_four = {0,0,0,0,0,1,1,2};
     public static final int[] build_order_five = {1,1,1,1,1,0,0,0,2,2};
+    public static final int[] build_order_six = {2,2,2,1,0,1,0,1,0};
+    public static final boolean RANDOM_MAP_HEURISTIC = true;
+    public static final int BUILD_ORDER_INDEX = 0;
+    public static int HQ_ASSIGNED_SUBREGION = 0;
+    public static int PREV_TROOP_COUNT=0;
+
+
 
 
     public static void initialize_build_orders(){
@@ -30,6 +37,7 @@ public strictfp class RobotPlayer{
         potential_build_orders.add(build_order_three);
         potential_build_orders.add(build_order_four);
         potential_build_orders.add(build_order_five);
+        potential_build_orders.add(build_order_six);
     }
 
 
@@ -38,8 +46,23 @@ public strictfp class RobotPlayer{
     }
 
     static MapLocation HQ_THAT_SPAWNED_ME;
+    static int HQ_ENCODED_POSITION = 0;
+    static boolean LATTICE_COMPUTED = false;
+    static int[] precomputed_lattice_codes;
+    //static int[] PRIORITY_MAP;
 
-    MapLocation[] index_to_position;
+    public static void precompute_lattice_positions(RobotController rc) throws GameActionException{
+        int ptr = 0;
+        for (int i = HQ_THAT_SPAWNED_ME.x - 64; i <= HQ_THAT_SPAWNED_ME.x + 64; i += 8) {
+            for (int j = HQ_THAT_SPAWNED_ME.y - 64; j <= HQ_THAT_SPAWNED_ME.y + 64; j += 8) {
+                precomputed_lattice_codes[ptr] = encode(i, j);
+                System.out.println("CODE: " + precomputed_lattice_codes[ptr]);
+                System.out.println("POSITION: " + i + " " + j);
+                ++ptr;
+            }
+        }
+        System.out.println("INTENDED SIZE: " + ptr);
+    }
     //every 6 turns, we try to spawn 3 politicians, 2 muckrakers, and 1 slanderer,
     //after we have discerned
     static Team my_team;
@@ -49,9 +72,11 @@ public strictfp class RobotPlayer{
     public static ArrayList<Integer> ec_id;//stores compressed information about the map locations
     public static ArrayList<Integer> raw_ec_id; //stores actual ID values
     public static ArrayList<Integer> pol_id;
-    public static ArrayList<Integer> potential_enemy_ecs;
-    public static MapLocation[] decode;
-    public static double BID_PERCENTAGE = 0.1;
+    public static ArrayList<Integer> neutral_ecs;
+    public static final int INTERNAL_LIMIT_COUNTER = 120;
+    public static int[] troops_sent_region;
+    public static double BID_PERCENTAGE = 0.5;
+    public static double DYN_MULTIPLIER = 1;
     public static int PREV_INFLUENCE = 0;
     //storing map information/dimensions
     static int OFFSET_X;
@@ -60,8 +85,9 @@ public strictfp class RobotPlayer{
     static int MAP_NORTH, MAP_SOUTH, MAP_EAST, MAP_WEST;
     static int MAP_TRAV;
     static int turnCount;
-    static int turn_ptr;
+    static int CUR_VOTES = 0;
 
+    static int CUR_ENCODED_POSITION;
     //for discerning map size(obsolete for the moment)
     static boolean RETURN_NATIVE_HQ;
     static Direction discern_dir, opp_dir;
@@ -73,6 +99,7 @@ public strictfp class RobotPlayer{
     static int TOGGLE_POLITICIAN_MODE = (1 << 12);
     static int SLANDERER_AND_MUCKRAKER_SWARM = (1 << 13);
     static int TRANSMIT_NEUTRAL_HQ_INFO = (1 << 9);
+    static int MUCKRAKER_ENEMY_OR_NEUTRAL_EC_SURROUND = (1 << 19);
     static int key_ptr;
 
     //storing pertinent enlightenment center information
@@ -85,31 +112,45 @@ public strictfp class RobotPlayer{
     static boolean IN_SLANDERER_HORDE;
     static int SLANDERER_PTR;
     static int SLANDERER_COOLDOWN;
+    static boolean MUCKRAKER_NAVIGATING_BACK=false;
+    static int CURRENT_ALLOCATED_REGION = -1; //we divide the board into 8*8 subregions using precomputed_lattice_codes
+    //and with that and the muckraker's far sensing radius, we can detect enemy and neutral hqs and report back
 
 
     static int[] politician_valid_health = {48,60,72,84};
-    static int POL_RANDOM_MULTIPLIER = 2048;
+    static int POL_RANDOM_MULTIPLIER = 512;
     static int SLANDERER_HEALTH_CAP = 50;
     static int MUCK_HEALTH_CAP = 1;
     static int MIN_TROOPS = 180;
     static int MIN_INFLUENCE = 3500;
 
+    //binary searching for enemy's bidding value
+    static int LEFT_BID_PTR = 0;
+    static int RIGHT_BID_PTR = 200;
+
+    //important for muckraker transmission of information
+    public static int TEMP_REGION = -1;
+    public static int TEMP_POSITION = -1;
+    public static int ENCODED_MESSAGE = -1;
 
 
-    public static MapLocation decode(int value){
-        if(HQ_THAT_SPAWNED_ME != null) {
-            for (int i = HQ_THAT_SPAWNED_ME.x - 64; i >= HQ_THAT_SPAWNED_ME.x + 64; i++) {
-                for (int j = HQ_THAT_SPAWNED_ME.y-64; i >= HQ_THAT_SPAWNED_ME.y+64; j++){
-                    if(encode(i,j)==value){
-                        return new MapLocation(i,j);
-                    }
-                }
-            }
-        }
-        return HQ_THAT_SPAWNED_ME;
+    public static MapLocation decode(RobotController rc, int value) throws GameActionException{
+        int y = value % 128;
+        int x = (value/128) % 128;
+        int offx = rc.getLocation().x/128;
+        int offy = rc.getLocation().y/128;
+        return new MapLocation( 128*offx + x, 128*offy + y);
     }
     public static int encode(int x, int y){
-        return 128 * ( (x)%128) + (y)%128;
+        return (128 * ((x)%128)) + (y)%128;
+    }
+    public static int my_current_region(int value){
+        for(int i = 0; i < precomputed_lattice_codes.length; i++){
+            if(precomputed_lattice_codes[i] == value){
+                return i;
+            }
+        }
+        return -1;
     }
 
     /*
@@ -124,22 +165,14 @@ public strictfp class RobotPlayer{
     }
 
      */
-
-    public static int find_compressed(MapLocation comp){
-        for(int i = 0; i < decode.length; i++){
-            if(decode[i].equals(comp)){
-                return i;
-            }
-        }
-        return -1;
-    }
     //based on information revealed in 01/09/21 lecture
 
     public static int distance(MapLocation one, MapLocation two){
         return (int)(Math.pow((one.x-two.x),2) + Math.pow((one.y-two.y),2));
     }
 
-    public static Direction[] correspond = {Direction.WEST,
+    public static Direction[] correspond = {
+            Direction.WEST,
             Direction.EAST,
             Direction.NORTH,
             Direction.SOUTH,
@@ -210,10 +243,9 @@ public strictfp class RobotPlayer{
         MAP_EAST=-1;
         MAP_WEST=-1;
         pol_centers = new ArrayList<MapLocation>();
-        potential_enemy_ecs = new ArrayList<Integer>();
-        slanderer_circles = new HashMap<Integer, ArrayList<SortedPair> >();
+        neutral_ecs = new ArrayList<Integer>();
+        //slanderer_circles = new HashMap<Integer, ArrayList<SortedPair> >();
         ec_id = new ArrayList<Integer>();
-        pol_id = new ArrayList<Integer>();
         my_team = null;
         RETURN_NATIVE_HQ = false;
         INITIATE_SLANDERER_HORDE=false;
@@ -224,16 +256,17 @@ public strictfp class RobotPlayer{
         SCOUT_NEUTRAL_HQ=true;
         SCOUT_ENEMY_MUCKRAKER=false;
         SUCCESSFUL_SLANDERER_HORDE=false;
-        turn_ptr=0;
         key_ptr=0;
         SLANDERER_PTR=0;
         SLANDERER_COOLDOWN=0;
         swarm_locs = new ArrayList<MapLocation>();
         swarm_ptr=0;
-        decode = new MapLocation[17000];
-        BotSlanderer.populate();
+        precomputed_lattice_codes = new int[1089];
+        troops_sent_region = new int[1089];
+        //BotSlanderer.populate();
         initialize_build_orders();
         HQ_THAT_SPAWNED_ME=null;
+        HQ_ENCODED_POSITION= 0;
         if(turnCount==0 && rc.getType() ==RobotType.ENLIGHTENMENT_CENTER) {
             //encode_position(rc.getLocation().x, rc.getLocation().y);
         }
@@ -241,6 +274,7 @@ public strictfp class RobotPlayer{
         System.out.println("SUCCESS");
 
         System.out.println("I'm a " + rc.getType() + " and I just got created!");
+        //PRIORITY_MAP = new int[512];
 
         while (true) {
             turnCount += 1;
